@@ -11,6 +11,98 @@ env:
   BUILD_TYPE: RelWithDebInfo
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Clone dependencies
+      run: |
+        git clone https://github.com/apohl79/audiogridder-deps.git
+
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.x'
+
+    - name: Configure CMake
+      run: |
+        python build.py conf --disable-signing --build-type ${{ env.BUILD_TYPE }} --deps-root audiogridder-deps
+
+    - name: Build
+      run: |
+        python build.py build
+
+    - name: List build outputs
+      run: |
+        Get-ChildItem -Recurse build-windows-x86_64/lib -ErrorAction SilentlyContinue | Select-Object FullName
+        Get-ChildItem -Recurse build-windows-x86_64/bin -ErrorAction SilentlyContinue | Select-Object FullName
+
+    - name: Package plugins (ZIP)
+      run: |
+        mkdir -p artifacts
+        # Copy VST3 plugins
+        if (Test-Path "build-windows-x86_64/lib/VST3") {
+          Copy-Item -Recurse "build-windows-x86_64/lib/VST3/*" "artifacts/" -ErrorAction SilentlyContinue
+        }
+        # Copy executables
+        if (Test-Path "build-windows-x86_64/bin") {
+          Copy-Item "build-windows-x86_64/bin/*.exe" "artifacts/" -ErrorAction SilentlyContinue
+        }
+        Get-ChildItem -Recurse artifacts/
+
+    - name: Create Inno Setup installer
+      run: |
+        # Get version
+        $version = Get-Content "package/VERSION.num" -Raw
+        $version = $version.Trim()
+
+        # Configure .iss files from templates
+        $pluginIss = Get-Content "package/AudioGridderPlugin.iss.in" -Raw
+        $pluginIss = $pluginIss -replace "#STR_VER#", $version
+        $pluginIss | Out-File -FilePath "package/AudioGridderPlugin.iss" -Encoding ASCII
+
+        $serverIss = Get-Content "package/AudioGridderServer.iss.in" -Raw
+        $serverIss = $serverIss -replace "#STR_VER#", $version
+        $serverIss | Out-File -FilePath "package/AudioGridderServer.iss" -Encoding ASCII
+
+        # Create build output directory
+        mkdir -p package/build -ErrorAction SilentlyContinue
+
+        # Run Inno Setup
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Opackage/build "package/AudioGridderPlugin.iss"
+        & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Opackage/build "package/AudioGridderServer.iss"
+      continue-on-error: true
+
+    - name: Upload Windows VST3 artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: audiogridder-windows-x86_64
+        path: artifacts/
+        retention-days: 30
+
+    - name: Upload Windows Installer (Plugin)
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: audiogridder-plugin-installer-windows
+        path: package/build/AudioGridderPlugin_*.exe
+        retention-days: 30
+        if-no-files-found: ignore
+
+    - name: Upload Windows Installer (Server)
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: audiogridder-server-installer-windows
+        path: package/build/AudioGridderServer_*.exe
+        retention-days: 30
+        if-no-files-found: ignore
+
   build-linux:
     runs-on: ubuntu-22.04
 
@@ -72,51 +164,4 @@ jobs:
       with:
         name: audiogridder-linux-x86_64
         path: artifacts/
-        retention-days: 30
-
-  build-linux-installer:
-    runs-on: ubuntu-22.04
-    needs: build-linux
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Download Linux artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: audiogridder-linux-x86_64
-        path: artifacts/
-
-    - name: Create installer package
-      run: |
-        mkdir -p installer
-        cp -r artifacts/* installer/
-        cat > installer/install.sh << 'INSTALL_EOF'
-        #!/bin/bash
-        set -e
-        VST3_DIR="$HOME/.vst3"
-        BIN_DIR="$HOME/.local/bin"
-        mkdir -p "$VST3_DIR" "$BIN_DIR"
-        echo "=== AudioGridder Linux Installer ==="
-        if [ -d "VST3" ]; then
-          echo "Installing VST3 plugins to $VST3_DIR..."
-          for so in VST3/*.so; do
-            [ -f "$so" ] && cp "$so" "$VST3_DIR/"
-          done
-        fi
-        [ -f "AudioGridderServer" ] && cp AudioGridderServer "$BIN_DIR/" && chmod +x "$BIN_DIR/AudioGridderServer"
-        [ -f "AudioGridderPluginTray" ] && cp AudioGridderPluginTray "$BIN_DIR/" && chmod +x "$BIN_DIR/AudioGridderPluginTray"
-        echo "Installation complete!"
-        echo "VST3 plugins: $VST3_DIR"
-        echo "Executables: $BIN_DIR"
-        INSTALL_EOF
-        chmod +x installer/install.sh
-        tar -czvf audiogridder-linux-x86_64.tar.gz -C installer .
-
-    - name: Upload installer
-      uses: actions/upload-artifact@v4
-      with:
-        name: audiogridder-installer-linux-x86_64
-        path: audiogridder-linux-x86_64.tar.gz
         retention-days: 30
