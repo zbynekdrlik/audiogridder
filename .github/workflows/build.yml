@@ -31,7 +31,7 @@ jobs:
 
     - name: Configure CMake
       run: |
-        python build.py conf --disable-signing --build-type ${{ env.BUILD_TYPE }} --deps-root audiogridder-deps
+        python build.py conf --disable-signing -t ${{ env.BUILD_TYPE }} --deps-root audiogridder-deps
 
     - name: Build
       run: |
@@ -143,7 +143,7 @@ jobs:
       run: |
         python3 build.py conf \
           --disable-signing \
-          --build-type ${{ env.BUILD_TYPE }} \
+          -t ${{ env.BUILD_TYPE }} \
           --deps-root audiogridder-deps
 
     - name: Build
