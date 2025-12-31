@@ -61,10 +61,8 @@ jobs:
     - name: Package plugins
       run: |
         mkdir -p artifacts/VST3
-        # Copy VST3 plugins (.so files on Linux)
         cp build-linux-x86_64/debug/VST3/*.so artifacts/VST3/ 2>/dev/null || \
         cp build-linux-x86_64/lib/*.so artifacts/VST3/ 2>/dev/null || true
-        # Copy server and tray executables
         cp build-linux-x86_64/bin/AudioGridderServer artifacts/ 2>/dev/null || true
         cp build-linux-x86_64/bin/AudioGridderPluginTray artifacts/ 2>/dev/null || true
         ls -laR artifacts/
@@ -94,54 +92,26 @@ jobs:
       run: |
         mkdir -p installer
         cp -r artifacts/* installer/
-        # Create installation script
-        cat > installer/install.sh << 'EOF'
-#!/bin/bash
-set -e
-
-VST3_DIR="$HOME/.vst3"
-BIN_DIR="$HOME/.local/bin"
-
-mkdir -p "$VST3_DIR" "$BIN_DIR"
-
-echo "=== AudioGridder Linux Installer ==="
-echo ""
-
-# Install VST3 plugins
-if [ -d "VST3" ]; then
-  echo "Installing VST3 plugins to $VST3_DIR..."
-  for so in VST3/*.so; do
-    if [ -f "$so" ]; then
-      name=$(basename "$so" .so)
-      echo "  - Installing $name..."
-      cp "$so" "$VST3_DIR/"
-    fi
-  done
-fi
-
-# Install server and tray (optional)
-if [ -f "AudioGridderServer" ]; then
-  echo "Installing AudioGridderServer to $BIN_DIR..."
-  cp AudioGridderServer "$BIN_DIR/"
-  chmod +x "$BIN_DIR/AudioGridderServer"
-fi
-
-if [ -f "AudioGridderPluginTray" ]; then
-  echo "Installing AudioGridderPluginTray to $BIN_DIR..."
-  cp AudioGridderPluginTray "$BIN_DIR/"
-  chmod +x "$BIN_DIR/AudioGridderPluginTray"
-fi
-
-echo ""
-echo "Installation complete!"
-echo "VST3 plugins installed to: $VST3_DIR"
-echo "Executables installed to: $BIN_DIR"
-echo ""
-echo "Make sure $BIN_DIR is in your PATH"
-EOF
+        cat > installer/install.sh << 'INSTALL_EOF'
+        #!/bin/bash
+        set -e
+        VST3_DIR="$HOME/.vst3"
+        BIN_DIR="$HOME/.local/bin"
+        mkdir -p "$VST3_DIR" "$BIN_DIR"
+        echo "=== AudioGridder Linux Installer ==="
+        if [ -d "VST3" ]; then
+          echo "Installing VST3 plugins to $VST3_DIR..."
+          for so in VST3/*.so; do
+            [ -f "$so" ] && cp "$so" "$VST3_DIR/"
+          done
+        fi
+        [ -f "AudioGridderServer" ] && cp AudioGridderServer "$BIN_DIR/" && chmod +x "$BIN_DIR/AudioGridderServer"
+        [ -f "AudioGridderPluginTray" ] && cp AudioGridderPluginTray "$BIN_DIR/" && chmod +x "$BIN_DIR/AudioGridderPluginTray"
+        echo "Installation complete!"
+        echo "VST3 plugins: $VST3_DIR"
+        echo "Executables: $BIN_DIR"
+        INSTALL_EOF
         chmod +x installer/install.sh
-
-        # Create tarball
         tar -czvf audiogridder-linux-x86_64.tar.gz -C installer .
 
     - name: Upload installer
