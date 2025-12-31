@@ -158,6 +158,15 @@ PluginProcessor::PluginProcessor(AudioProcessor::WrapperType wt)
                 enableParamAutomation(std::get<0>(ap), std::get<1>(ap), std::get<2>(ap), std::get<3>(ap));
             }
 
+            // Clear the restore flag after all state restoration is complete
+            m_isRestoringState = false;
+
+            // Now that restore is complete, set the correct latency if it changed
+            int samples = jmax(0, m_client->getLatencySamples());
+            if (samples != getLatencySamples()) {
+                setLatencySamples(samples);
+            }
+
             auto* editor = getActiveEditor();
             if (editor != nullptr) {
                 dynamic_cast<PluginEditor*>(editor)->setConnected(true);
@@ -873,7 +882,12 @@ void PluginProcessor::updateLatency() {
 
     int samples = jmax(0, m_client->getLatencySamples());
     logln("updating latency samples to " << samples);
-    setLatencySamples(samples);
+
+    // Skip setLatencySamples during state restore to prevent marking project as dirty
+    if (!m_isRestoringState) {
+        setLatencySamples(samples);
+    }
+
     int channels = getTotalNumOutputChannels();
 
     std::lock_guard<std::mutex> lock(m_bypassBufferMtx);
@@ -900,12 +914,16 @@ void PluginProcessor::getStateInformation(MemoryBlock& destData) {
 void PluginProcessor::setStateInformation(const void* data, int sizeInBytes) {
     traceScope();
 
+    // Suppress host notifications during state restore to prevent project being marked as dirty
+    m_isRestoringState = true;
+
     std::string dump(static_cast<const char*>(data), (size_t)sizeInBytes);
     try {
         json j = json::parse(dump);
         setState(j);
     } catch (json::parse_error& e) {
         logln("parsing state info failed: " << e.what());
+        m_isRestoringState = false;  // Clear flag on error
     }
 }
 
@@ -996,14 +1014,23 @@ bool PluginProcessor::setState(const json& j) {
         }
     }
 
+    bool willReconnect = false;
     if (activeServerStr.isNotEmpty()) {
         m_client->setServer(activeServerStr);
         m_client->reconnect();
+        willReconnect = true;
     } else if (activeServer > -1 && activeServer < m_servers.size()) {
         m_client->setServer(m_servers[activeServer]);
         m_client->reconnect();
+        willReconnect = true;
     } else if (m_client->isReadyLockFree()) {
         m_client->reconnect();
+        willReconnect = true;
+    }
+
+    // If no reconnect will happen, clear the restore flag now
+    if (!willReconnect) {
+        m_isRestoringState = false;
     }
 
     runOnMsgThreadAsync([this] {
@@ -1402,7 +1429,10 @@ bool PluginProcessor::enableParamAutomation(int idx, int channel, int paramIdx, 
         }
     }
     if (updateHost) {
-        updateHostDisplay();
+        // Skip updateHostDisplay during state restore to prevent marking project as dirty
+        if (!m_isRestoringState) {
+            updateHostDisplay();
+        }
         return true;
     }
     logln("failed to enable automation: no slot available, "
@@ -1485,9 +1515,13 @@ void PluginProcessor::updateParameterValue(int idx, int channel, int paramIdx, f
         if (slot > -1) {
             auto* pparam = dynamic_cast<Parameter*>(getParameters()[slot]);
             if (nullptr != pparam) {
-                // this will trigger the server update as well, need to call this on the message thread or automation
-                // recording does not work for VST3
-                pparam->setValueNotifyingHost(val);
+                // Skip host notification during state restore to prevent marking project as dirty
+                // Also skip if value hasn't actually changed
+                if (!m_isRestoringState && changed) {
+                    // this will trigger the server update as well, need to call this on the message thread or automation
+                    // recording does not work for VST3
+                    pparam->setValueNotifyingHost(val);
+                }
                 return;
             }
         } else {
