@@ -1926,10 +1926,29 @@ void PluginProcessor::TrayConnection::run() {
 #endif
                 if (File(path).existsAsFile()) {
                     logln("tray connection failed, trying to run tray app: " << path);
+#ifdef JUCE_WINDOWS
+                    // Use CreateProcess with bInheritHandles=FALSE to prevent the tray app
+                    // from inheriting file handles from the host (e.g. Ableton's .als file),
+                    // which would cause ERROR_SHARING_VIOLATION when the host tries to save.
+                    STARTUPINFOW si = {};
+                    si.cb = sizeof(si);
+                    PROCESS_INFORMATION pi = {};
+                    auto wpath = path.toWideCharPointer();
+                    std::wstring cmd(wpath);
+                    if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                                       CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                                       nullptr, nullptr, &si, &pi)) {
+                        CloseHandle(pi.hThread);
+                        CloseHandle(pi.hProcess);
+                    } else {
+                        logln("failed to start tray app");
+                    }
+#else
                     ChildProcess proc;
                     if (!proc.start(path, 0)) {
                         logln("failed to start tray app");
                     }
+#endif
                 } else {
                     logln("no tray app available");
                     static std::once_flag once;
