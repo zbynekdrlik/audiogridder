@@ -487,7 +487,6 @@ class PluginProcessor : public AudioProcessor, public AudioProcessorParameter::L
     std::vector<LoadedPlugin> m_loadedPlugins;
     mutable std::mutex m_loadedPluginsSyncMtx;
     std::atomic_bool m_loadedPluginsOk{false};
-    std::atomic_bool m_isRestoringState{false};  // Suppress host notifications during state restore
     std::atomic_uint64_t m_loadedPluginsCount{0};
     int m_autoReconnects = 0;
     int m_activePlugin = -1;

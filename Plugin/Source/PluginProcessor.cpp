@@ -158,15 +158,6 @@ PluginProcessor::PluginProcessor(AudioProcessor::WrapperType wt)
                 enableParamAutomation(std::get<0>(ap), std::get<1>(ap), std::get<2>(ap), std::get<3>(ap));
             }
 
-            // Clear the restore flag after all state restoration is complete
-            m_isRestoringState = false;
-
-            // Now that restore is complete, set the correct latency if it changed
-            int samples = jmax(0, m_client->getLatencySamples());
-            if (samples != getLatencySamples()) {
-                setLatencySamples(samples);
-            }
-
             auto* editor = getActiveEditor();
             if (editor != nullptr) {
                 dynamic_cast<PluginEditor*>(editor)->setConnected(true);
@@ -882,12 +873,7 @@ void PluginProcessor::updateLatency() {
 
     int samples = jmax(0, m_client->getLatencySamples());
     logln("updating latency samples to " << samples);
-
-    // Skip setLatencySamples during state restore to prevent marking project as dirty
-    if (!m_isRestoringState) {
-        setLatencySamples(samples);
-    }
-
+    setLatencySamples(samples);
     int channels = getTotalNumOutputChannels();
 
     std::lock_guard<std::mutex> lock(m_bypassBufferMtx);
@@ -905,23 +891,14 @@ AudioProcessorEditor* PluginProcessor::createEditor() { return new PluginEditor(
 
 void PluginProcessor::getStateInformation(MemoryBlock& destData) {
     traceScope();
-    try {
-        auto j = getState(true);
-        auto dump = j.dump();
-        destData.append(dump.data(), dump.length());
-        saveConfig();
-    } catch (std::exception& e) {
-        logln("error in getStateInformation: " << e.what());
-    } catch (...) {
-        logln("error in getStateInformation: unknown exception");
-    }
+    auto j = getState(true);
+    auto dump = j.dump();
+    destData.append(dump.data(), dump.length());
+    saveConfig();
 }
 
 void PluginProcessor::setStateInformation(const void* data, int sizeInBytes) {
     traceScope();
-
-    // Suppress host notifications during state restore to prevent project being marked as dirty
-    m_isRestoringState = true;
 
     std::string dump(static_cast<const char*>(data), (size_t)sizeInBytes);
     try {
@@ -929,7 +906,6 @@ void PluginProcessor::setStateInformation(const void* data, int sizeInBytes) {
         setState(j);
     } catch (json::parse_error& e) {
         logln("parsing state info failed: " << e.what());
-        m_isRestoringState = false;  // Clear flag on error
     }
 }
 
@@ -958,10 +934,11 @@ json PluginProcessor::getState(bool withActiveServer) {
             auto& plug = m_loadedPlugins[(size_t)i];
             if (m_loadedPluginsOk && m_client->isReadyLockFree()) {
                 auto settings = m_client->getPluginSettings(i);
+                if (!m_client->isReadyLockFree()) {
+                    logln("error in getState: getPluginSettings for " << plug.name << " (" << plug.id << ") failed");
+                }
                 if (settings.length() > 0) {
                     plug.settings = std::move(settings);
-                } else {
-                    logln("warning in getState: using cached settings for " << plug.name << " (" << plug.id << ")");
                 }
             }
             jplugs.push_back(plug.toJson());
@@ -1019,23 +996,14 @@ bool PluginProcessor::setState(const json& j) {
         }
     }
 
-    bool willReconnect = false;
     if (activeServerStr.isNotEmpty()) {
         m_client->setServer(activeServerStr);
         m_client->reconnect();
-        willReconnect = true;
     } else if (activeServer > -1 && activeServer < m_servers.size()) {
         m_client->setServer(m_servers[activeServer]);
         m_client->reconnect();
-        willReconnect = true;
     } else if (m_client->isReadyLockFree()) {
         m_client->reconnect();
-        willReconnect = true;
-    }
-
-    // If no reconnect will happen, clear the restore flag now
-    if (!willReconnect) {
-        m_isRestoringState = false;
     }
 
     runOnMsgThreadAsync([this] {
@@ -1434,10 +1402,7 @@ bool PluginProcessor::enableParamAutomation(int idx, int channel, int paramIdx, 
         }
     }
     if (updateHost) {
-        // Skip updateHostDisplay during state restore to prevent marking project as dirty
-        if (!m_isRestoringState) {
-            updateHostDisplay();
-        }
+        updateHostDisplay();
         return true;
     }
     logln("failed to enable automation: no slot available, "
@@ -1520,14 +1485,9 @@ void PluginProcessor::updateParameterValue(int idx, int channel, int paramIdx, f
         if (slot > -1) {
             auto* pparam = dynamic_cast<Parameter*>(getParameters()[slot]);
             if (nullptr != pparam) {
-                if (m_isRestoringState) {
-                    // During state restore, set value without notifying host to prevent dirty flag
-                    pparam->setValue(val);
-                } else if (changed) {
-                    // this will trigger the server update as well, need to call this on the message thread or automation
-                    // recording does not work for VST3
-                    pparam->setValueNotifyingHost(val);
-                }
+                // this will trigger the server update as well, need to call this on the message thread or automation
+                // recording does not work for VST3
+                pparam->setValueNotifyingHost(val);
                 return;
             }
         } else {
