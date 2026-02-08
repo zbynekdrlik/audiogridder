@@ -905,10 +905,16 @@ AudioProcessorEditor* PluginProcessor::createEditor() { return new PluginEditor(
 
 void PluginProcessor::getStateInformation(MemoryBlock& destData) {
     traceScope();
-    auto j = getState(true);
-    auto dump = j.dump();
-    destData.append(dump.data(), dump.length());
-    saveConfig();
+    try {
+        auto j = getState(true);
+        auto dump = j.dump();
+        destData.append(dump.data(), dump.length());
+        saveConfig();
+    } catch (std::exception& e) {
+        logln("error in getStateInformation: " << e.what());
+    } catch (...) {
+        logln("error in getStateInformation: unknown exception");
+    }
 }
 
 void PluginProcessor::setStateInformation(const void* data, int sizeInBytes) {
@@ -952,11 +958,10 @@ json PluginProcessor::getState(bool withActiveServer) {
             auto& plug = m_loadedPlugins[(size_t)i];
             if (m_loadedPluginsOk && m_client->isReadyLockFree()) {
                 auto settings = m_client->getPluginSettings(i);
-                if (!m_client->isReadyLockFree()) {
-                    logln("error in getState: getPluginSettings for " << plug.name << " (" << plug.id << ") failed");
-                }
                 if (settings.length() > 0) {
                     plug.settings = std::move(settings);
+                } else {
+                    logln("warning in getState: using cached settings for " << plug.name << " (" << plug.id << ")");
                 }
             }
             jplugs.push_back(plug.toJson());
@@ -1515,9 +1520,10 @@ void PluginProcessor::updateParameterValue(int idx, int channel, int paramIdx, f
         if (slot > -1) {
             auto* pparam = dynamic_cast<Parameter*>(getParameters()[slot]);
             if (nullptr != pparam) {
-                // Skip host notification during state restore to prevent marking project as dirty
-                // Also skip if value hasn't actually changed
-                if (!m_isRestoringState && changed) {
+                if (m_isRestoringState) {
+                    // During state restore, set value without notifying host to prevent dirty flag
+                    pparam->setValue(val);
+                } else if (changed) {
                     // this will trigger the server update as well, need to call this on the message thread or automation
                     // recording does not work for VST3
                     pparam->setValueNotifyingHost(val);
